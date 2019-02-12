@@ -5,6 +5,7 @@ from torch.autograd import Variable
 from torch.nn.modules.utils import _pair
 from  utils import batchConv2d
 import torch.nn.functional as F
+from torch.nn.parameter import Parameter
 
 class ConvRNNCellBase(nn.Module):
     def __repr__(self):
@@ -84,6 +85,55 @@ class ConvLSTMCell(ConvRNNCellBase):
 
         return hy, cy
 
+class LSTMCell(nn.Module):
+
+    """
+    An implementation of Hochreiter & Schmidhuber:
+    'Long-Short Term Memory' cell.
+    http://www.bioinf.jku.at/publications/older/2604.pdf
+
+    """
+
+    def __init__(self, input_size, hidden_size, bias=True):
+        super(LSTMCell, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.bias = bias
+        self.x2h = nn.Linear(input_size, 4 * hidden_size, bias=bias)
+        self.h2h = nn.Linear(hidden_size, 4 * hidden_size, bias=bias)
+        self.reset_parameters()
+
+
+
+    def reset_parameters(self):
+        std = 1.0 / math.sqrt(self.hidden_size)
+        for w in self.parameters():
+            w.data.uniform_(-std, std)
+    
+    def forward(self, x, hidden):
+        
+        hx, cx = hidden
+        
+        x = x.view(-1, x.size(1))
+        
+        gates = self.x2h(x) + self.h2h(hx)
+    
+        gates = gates.squeeze()
+        
+        ingate, forgetgate, cellgate, outgate = gates.chunk(4, 1)
+        
+        ingate = F.sigmoid(ingate)
+        forgetgate = F.sigmoid(forgetgate)
+        cellgate = F.tanh(cellgate)
+        outgate = F.sigmoid(outgate)
+        
+
+        cy = torch.mul(cx, forgetgate) +  torch.mul(ingate, cellgate)        
+
+        hy = torch.mul(outgate, F.tanh(cy))
+        
+        return (hy, cy)
+
 
 class ConvLSTMCellTemp(ConvRNNCellBase):
     def __init__(self,
@@ -110,45 +160,56 @@ class ConvLSTMCellTemp(ConvRNNCellBase):
         self.gate_channels = 4 * self.hidden_channels
 
 
-        ksize_i = self.gate_channels * self.input_channels * self.kernel_size * self.kernel_size 
-        ksize_h = self.gate_channels * self.hidden_channels * self.hidden_kernel_size * self.hidden_kernel_size
+        ksize_i = self.gate_channels * self.input_channels * self.kernel_size[0] * self.kernel_size[1] 
+        ksize_h = self.gate_channels * self.hidden_channels * self.hidden_kernel_size[0] * self.hidden_kernel_size[1]
 
-        self.hyper2KernelW_i = Parameter(torch.fmod(torch.randn((16, ksize_i)),2))
-        self.hyper2KernelB_i = Parameter(torch.fmod(torch.randn(ksize_i),2))
+        self.hyper2KernelW_i = Parameter(torch.fmod(torch.zeros((16, ksize_i)),2))
+        self.hyper2KernelB_i = Parameter(torch.fmod(torch.zeros(ksize_i),2))
 
-        self.hyper2KernelW_h = Parameter(torch.fmod(torch.randn((16, ksize_h)),2))
-        self.hyper2KernelB_h = Parameter(torch.fmod(torch.randn(ksize_h),2))
+        self.hyper2KernelW_h = Parameter(torch.fmod(torch.zeros((16, ksize_h)),2))
+        self.hyper2KernelB_h = Parameter(torch.fmod(torch.zeros(ksize_h),2))
 
 
-        '''
+       
         self.conv_ih = nn.Conv2d(
             in_channels=self.input_channels,
-            out_channels=gate_channels,
+            out_channels=self.gate_channels,
             kernel_size=self.kernel_size,
             stride=self.stride,
             padding=self.padding,
             dilation=self.dilation,
             bias=bias)
 
+        for param in self.conv_ih.parameters():
+            param.requires_grad = False
+
         self.conv_hh = nn.Conv2d(
             in_channels=self.hidden_channels,
-            out_channels=gate_channels,
-            kernel_size=hidden_kernel_size,
+            out_channels=self.gate_channels,
+            kernel_size=self.hidden_kernel_size,
             stride=1,
-            padding=hidden_padding,
+            padding=self.hidden_padding,
             dilation=1,
             bias=bias)
-        '''    
+
+        for param in self.conv_hh.parameters():
+            param.requires_grad = False
+          
 
     def forward(self, input,context,hidden,hidden_hyper,batchsize):
         hx, cx = hidden
         hyper_h,hyper_c = self.hyperlstm(context,hidden_hyper)
+        #hyper_h = context
+        #hyper_c = None
+        conv_w_i = torch.matmul(hyper_h, self.hyper2KernelW_i) 
+        conv_w_h = torch.matmul(hyper_h, self.hyper2KernelW_h)
 
-        conv_w_i = torch.matmul(hyper_h, self.hyper2KernelW_i) + self.hyper2KernelB_i
-        conv_w_h = torch.matmul(hyper_h, self.hyper2KernelW_h) + self.hyper2KernelB_h
 
-        conv_w_i= conv_w_i.view(batchsize,self.gate_channels,self.input_channels,self.kernel_size,self.kernel_size)
-        conv_w_h= conv_w_h.view(batchsize,self.gate_channels,self.hidden_channels,self.hidden_kernel_size,self.hidden_kernel_size)
+        conv_w_i= conv_w_i.view(self.gate_channels,self.input_channels,self.kernel_size[0],self.kernel_size[1])
+        conv_w_h= conv_w_h.view(self.gate_channels,self.hidden_channels,self.hidden_kernel_size[0],self.hidden_kernel_size[1])
+
+        conv_w_i = self.conv_ih.weight + conv_w_i
+        conv_w_h = self.conv_hh.weight + conv_w_h
 
         #hx =hx.view(1,-1,hx.shape[2],hx.shape[3])
         #print(conv_w_i.shape,"weird")
@@ -160,8 +221,12 @@ class ConvLSTMCellTemp(ConvRNNCellBase):
         #gate_input = gate_input.view(self.batchsize,512,gate_input.shape[2],gate_input.shape[3])
         #gate_hidden = gate_hidden.view(self.batchsize,512,gate_hidden.shape[2],gate_hidden.shape[3])
         #print(gate_input.shape,gate_hidden.shape)
-        gate_input= batchConv2d(input,conv_w_i,batchsize,stride=self.stride,padding=self.padding,dilation=self.dilation,bias=self.bias)
-        gate_hidden= batchConv2d(hx,conv_w_h,batchsize,stride=1,padding=self.hidden_padding,dilation=1,bias=self.bias)
+        
+        #gate_input= batchConv2d(input,conv_w_i,batchsize,stride=self.stride,padding=self.padding,dilation=self.dilation,bias=self.bias)
+        #gate_hidden= batchConv2d(hx,conv_w_h,batchsize,stride=1,padding=self.hidden_padding,dilation=1,bias=self.bias)
+
+        gate_input = F.conv2d(input,conv_w_i,stride=self.stride,padding=self.padding)
+        gate_hidden = F.conv2d(hx,conv_w_h,stride=1,padding=self.hidden_padding)
 
         gates = gate_input + gate_hidden
 

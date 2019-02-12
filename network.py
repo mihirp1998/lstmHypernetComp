@@ -10,10 +10,12 @@ class EncoderCell(nn.Module):
     def __init__(self):
         super(EncoderCell, self).__init__()
 
-        # self.conv = nn.Conv2d(
-        #     3, 64, kernel_size=3, stride=2, padding=1, bias=False)
-        self.conv = BatchConv2dContext(3,64,kernel_size=3,stride=2, padding=1, bias=False)
-
+        self.conv = nn.Conv2d(
+            3, 64, kernel_size=3, stride=2, padding=1, bias=False)
+        self.customConv = BatchConv2dContext(3,64,kernel_size=3,stride=2, padding=1, bias=False)
+        
+        for param in self.conv.parameters():
+            param.requires_grad = False
         #self.hyper1 = HyperConvLSTMCell(64,256,256,128,stride=2)
         self.rnn1 = ConvLSTMCellTemp(
             64,
@@ -44,19 +46,19 @@ class EncoderCell(nn.Module):
         self.batchsize=batchsize
 
         hidden1,hidden2,hidden3 =  encoder_h
-        hyperhidden1,hyperhidden3,hyperhidden3 = enc_hyper_h 
+        hyperhidden1,hyperhidden2,hyperhidden3 = enc_hyper_h 
 
-        x = self.conv(input,context,batchsize)
+        x,context_x = self.customConv(input,context,self.conv.weight,batchsize)
 
-        hidden1,hyperhidden1 = self.rnn1(x,context,hidden1,hyperhidden1,self.batchsize)
+        hidden1,hyperhidden1 = self.rnn1(x,context_x,hidden1,hyperhidden1,self.batchsize)
         x = hidden1[0]
         context_x = hyperhidden1[0]
 
-        hidden2,,hyperhidden2 = self.rnn2(x,context_x,hidden2,hyperhidden2,self.batchsize)
+        hidden2,hyperhidden2 = self.rnn2(x,context_x,hidden2,hyperhidden2,self.batchsize)
         x = hidden2[0]
         context_x = hyperhidden2[0]
 
-        hidden3,,hyperhidden3 = self.rnn3(x,context_x,hidden3,hyperhidden3,self.batchsize)
+        hidden3,hyperhidden3 = self.rnn3(x,context_x,hidden3,hyperhidden3,self.batchsize)
         x = hidden3[0]
         context_x = hyperhidden3[0]
 
@@ -66,15 +68,19 @@ class EncoderCell(nn.Module):
 class Binarizer(nn.Module):
     def __init__(self):
         super(Binarizer, self).__init__()
-        #self.conv = nn.Conv2d(512, 32, kernel_size=1, bias=False)
-        self.conv = BatchConv2dContext(512,32,kernel_size=1,stride=1, padding=0, bias=False)
+        self.conv = nn.Conv2d(512, 32, kernel_size=1, bias=False)
+
+        for param in self.conv.parameters():
+            param.requires_grad = False
+
+        self.customConv = BatchConv2dContext(512,32,kernel_size=1,stride=1, padding=0, bias=False)
         self.sign = Sign()
 
     def forward(self, input,context,batchsize):
-        feat = self.conv(input,context,batchsize)
+        feat,context_x = self.customConv(input,context,self.conv.weight,batchsize)
         # feat = batchConv2d(input,context,batchsize,stride=1, padding=0, bias=False)
         x = F.tanh(feat)
-        return self.sign(x)
+        return self.sign(x),context_x
 
 
 class HyperNetwork(nn.Module):
@@ -178,9 +184,12 @@ class DecoderCell(nn.Module):
     def __init__(self):
         super(DecoderCell, self).__init__()
         
-        ''' self.conv1 = nn.Conv2d(
-            32, 512, kernel_size=1, stride=1, padding=0, bias=False)'''
-        self.conv1 = BatchConv2dContext(32, 512, kernel_size=1, stride=1, padding=0, bias=False)
+        self.conv1 = nn.Conv2d(
+            32, 512, kernel_size=1, stride=1, padding=0, bias=False)
+        for param in self.conv1.parameters():
+            param.requires_grad = False
+
+        self.customConv1 = BatchConv2dContext(32, 512, kernel_size=1, stride=1, padding=0, bias=False)
         self.rnn1 = ConvLSTMCellTemp(
             512,
             512,
@@ -213,23 +222,25 @@ class DecoderCell(nn.Module):
             padding=1,
             hidden_kernel_size=3,
             bias=False)
-        self.conv2 = BatchConv2dContext(32, 3, kernel_size=1, stride=1, padding=0, bias=False)
+        self.customConv2 = BatchConv2dContext(32, 3, kernel_size=1, stride=1, padding=0, bias=False)
 
-        '''
+        
         self.conv2 = nn.Conv2d(
             32, 3, kernel_size=1, stride=1, padding=0, bias=False)
-        '''
+        for param in self.conv2.parameters():
+            param.requires_grad = False
+       
 
 
     def forward(self, input,context, decoder_h,dec_hyper_h,batchsize):
         self.batchsize=batchsize
 
         hidden1,hidden2,hidden3,hidden4 =  decoder_h
-        hyperhidden1,hyperhidden3,hyperhidden3,hyperhidden4 = dec_hyper_h
+        hyperhidden1,hyperhidden2,hyperhidden3,hyperhidden4 = dec_hyper_h
 
-        x = self.conv(input,context,batchsize)
+        x,context_x = self.customConv1(input,context,self.conv1.weight,batchsize)
 
-        hidden1,hyperhidden1 = self.rnn1(x,context,hidden1,hyperhidden1,self.batchsize)
+        hidden1,hyperhidden1 = self.rnn1(x,context_x,hidden1,hyperhidden1,self.batchsize)
         x = hidden1[0]
         context_x = hyperhidden1[0]
         x = F.pixel_shuffle(x, 2)
@@ -249,7 +260,7 @@ class DecoderCell(nn.Module):
         context_x = hyperhidden4[0]
         x = F.pixel_shuffle(x, 2)
 
-        x = self.conv2(x,context_x,batchsize)
+        x,context_x = self.customConv2(x,context_x,self.conv2.weight,batchsize)
         x = F.tanh(x) / 2
 
-        return x, context_x,[hidden1, hidden2, hidden3, hidden4],[hyperhidden1,hyperhidden2,hyperhidden3,hyperhidden4]
+        return x,context_x, [hidden1, hidden2, hidden3, hidden4],[hyperhidden1,hyperhidden2,hyperhidden3,hyperhidden4]

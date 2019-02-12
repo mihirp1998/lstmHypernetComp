@@ -126,6 +126,30 @@ def forward_model(model, data,context, args,iterations):
 		decoder_h_3 = (decoder_h_3[0].cuda(), decoder_h_3[1].cuda())
 		decoder_h_4 = (decoder_h_4[0].cuda(), decoder_h_4[1].cuda())
 
+
+        enc_hyper_h1 = (Variable(torch.zeros(1,hid)),Variable(torch.zeros(1,hid)))
+
+        enc_hyper_h2 = (Variable(torch.zeros(1,hid)),Variable(torch.zeros(1,hid)))
+        
+        enc_hyper_h3 = (Variable(torch.zeros(1,hid)),Variable(torch.zeros(1,hid)))
+
+        dec_hyper_h1 = (Variable(torch.zeros(1,hid )), Variable(torch.zeros(1,hid)))
+        
+        dec_hyper_h2 = (Variable(torch.zeros(1,hid)),Variable(torch.zeros(1,hid)))
+        
+        dec_hyper_h3 = (Variable(torch.zeros(1,hid)),Variable(torch.zeros(1,hid )))
+        
+        dec_hyper_h4 = (Variable(torch.zeros(1,hid)),Variable(torch.zeros(1,hid )))
+
+        enc_hyper_h1 = (enc_hyper_h1[0].cuda(), enc_hyper_h1[1].cuda())
+        enc_hyper_h2 = (enc_hyper_h2[0].cuda(), enc_hyper_h2[1].cuda())
+        enc_hyper_h3 = (enc_hyper_h3[0].cuda(), enc_hyper_h3[1].cuda())
+
+        dec_hyper_h1 = (dec_hyper_h1[0].cuda(), dec_hyper_h1[1].cuda())
+        dec_hyper_h2 = (dec_hyper_h2[0].cuda(), dec_hyper_h2[1].cuda())
+        dec_hyper_h3 = (dec_hyper_h3[0].cuda(), dec_hyper_h3[1].cuda())
+        dec_hyper_h4 = (dec_hyper_h4[0].cuda(), dec_hyper_h4[1].cuda())
+
 		patches = Variable(data.cuda())
 
 		losses = []
@@ -147,20 +171,16 @@ def forward_model(model, data,context, args,iterations):
 
 		codes = []
 		prev_psnr = 0.0
-		for i in range(iterations):
-			encoder_input = res
 
-			# Encode.
-			encoded, encoder_h_1, encoder_h_2, encoder_h_3 = encoder(
-				encoder_input, encoder_h_1, encoder_h_2, encoder_h_3)
+		context = hypernet(id_num,batch_size)
 
-			# Binarize.
-			code = binarizer(encoded)
-			# if args.save_codes:
-			#     codes.append(code.data.cpu().numpy())
 
-			output, decoder_h_1, decoder_h_2, decoder_h_3, decoder_h_4 = decoder(
-				code,context, decoder_h_1, decoder_h_2, decoder_h_3, decoder_h_4,i)
+        for i in range(args.iterations):
+            encoded,context, encoder_h, enc_hyper_h = encoder(res,context,encoder_h,enc_hyper_h,batch_size)
+
+            codes,context = binarizer(encoded,context,batch_size)
+
+            output,context,decoder_h,dec_hyper_h = decoder(codes,context,decoder_h,dec_hyper_h,batch_size)
 
 			res = res - output
 			out_img = out_img + output.data.cpu()
@@ -259,8 +279,8 @@ def resume(epoch=None):
 		torch.load('{}/binarizer_{}_{:08d}.pth'.format(args.directory,s, epoch)))
 	decoder.load_state_dict(
 		torch.load('{}/decoder_{}_{:08d}.pth'.format(args.directory,s, epoch)))
-	unet.load_state_dict(
-		torch.load('{}/unet_{}_{:08d}.pth'.format(args.directory,s, epoch)))
+	hypernet_.load_state_dict(
+		torch.load('{}/hypernet_{}_{:08d}.pth'.format(args.directory,s, epoch)))
 	'''
 	encoder.load_state_dict(
 		torch.load('checkpoint100_new/encoder_temp.pth'.format(s, epoch)))
@@ -331,7 +351,7 @@ decoder = decoder.cuda()
 unet = unet.cuda()
 
 model = [encoder, binarizer, decoder,unet]
-resume()
+#resume()
 if args.checkpoint:
 	resume(args.checkpoint)
 

@@ -1,0 +1,24 @@
+hypernet  1600
+encoder  290819408
+decoder  311683712
+binarizer  278800
+
+hypernet  1600
+encoder  290819408
+decoder  311683712
+binarizer  278800
+
+#hypernet  1600
+#encoder  307926032
+#decoder  330017504
+#binarizer  295184
+
+hypernet  1600
+encoder  307926032
+decoder  330001024
+binarizer  295184
+
+hypernet  1600
+encoder  290821136
+decoder  311683712
+binarizer  295184

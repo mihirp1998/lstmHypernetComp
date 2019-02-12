@@ -20,7 +20,7 @@ parser.add_argument(
 parser.add_argument(
     '--train', '-f', required=True, type=str, help='folder of training images')
 parser.add_argument(
-    '--max-epochs', '-e', type=int, default=200, help='max epochs')
+    '--max-epochs', '-e', type=int, default=20000, help='max epochs')
 parser.add_argument('--lr', type=float, default=0.0005, help='learning rate')
 # parser.add_argument('--cuda', '-g', action='store_true', help='enables cuda')
 parser.add_argument(
@@ -29,14 +29,14 @@ parser.add_argument('--checkpoint', type=int, help='unroll iterations')
 args = parser.parse_args()
 
 ## load 32x32 patches from images
-import dataset
+import new_dataset as dataset
 
 train_transform = transforms.Compose([
     transforms.RandomCrop((32, 32)),
     transforms.ToTensor(),
 ])
 
-train_set = dataset.ImageFolder(root=args.train,train=True,file_name ="outValid15_100Vids.p")
+train_set = dataset.ImageFolder(root=args.train,train=False,file_name ="outValid15_100Vids.p")
 
 train_loader = data.DataLoader(
     dataset=train_set, batch_size=args.batch_size, shuffle=True, num_workers=1)
@@ -79,7 +79,13 @@ solver = optim.Adam(
     ],
     lr=args.lr)
 
-
+def loadPretrain(pretrain_dict,model,name):
+    print(name)
+    model_dict = model.state_dict()
+    print('not in ',{k: v for k, v in pretrain_dict.items() if k not in model_dict})
+    model_dict.update(pretrain_dict)
+    print("non common keys ",[i for i in model_dict.keys() if i not in pretrain_dict.keys()])
+    model.load_state_dict(model_dict)
 
 def resume(epoch=None):
     if epoch is None:
@@ -88,22 +94,25 @@ def resume(epoch=None):
     else:
         s = 'epoch'
     print("Loaded")
-    '''
-    encoder.load_state_dict(
-        torch.load('checkpoint100_new/encoder_temp.pth'.format(s, epoch)))
-    binarizer.load_state_dict(
-        torch.load('checkpoint100_new/binarizer_temp.pth'.format(s, epoch)))
-    decoder.load_state_dict(
-        torch.load('checkpoint100_new/decoder_temp.pth'.format(s, epoch)))
-    unet.load_state_dict(
-        torch.load('checkpoint100_new/unet_temp.pth'.format(s, epoch)))
-        '''
+    
     encoder.load_state_dict(
         torch.load('checkpoint100_small/encoder_{}_{:08d}.pth'.format(s, epoch)))
     binarizer.load_state_dict(
         torch.load('checkpoint100_small/binarizer_{}_{:08d}.pth'.format(s, epoch)))
     decoder.load_state_dict(
         torch.load('checkpoint100_small/decoder_{}_{:08d}.pth'.format(s, epoch)))
+    hypernet.load_state_dict(
+        torch.load('checkpoint100_small/hypernet_{}_{:08d}.pth'.format(s, epoch)))
+        
+    '''
+    pre_encoder = torch.load('checkpoint/encoder_{}_{:08d}.pth'.format("epoch",10))
+    pre_binarizer = torch.load('checkpoint/binarizer_{}_{:08d}.pth'.format("epoch",10))
+    pre_decoder = torch.load('checkpoint/decoder_{}_{:08d}.pth'.format("epoch",10))
+    loadPretrain(pre_encoder,encoder,"encoder")
+    loadPretrain(pre_binarizer,binarizer,"binarizer")
+    loadPretrain(pre_decoder,decoder,"decoder")
+
+    '''
     #unet.load_state_dict(
      #   torch.load('checkpoint100_small/unet_{}_{:08d}.pth'.format(s, epoch)))
     #ff.load_state_dict(
@@ -111,13 +120,13 @@ def resume(epoch=None):
     '''
     hypernet_dict = hypernet.state_dict()
     pretrain_hypernet = torch.load('checkpoint100_small/hypernet_{}_{:08d}.pth'.format(s, epoch))
-    pretrain_hypernet= {k: v for k, v in pretrain_hypernet.items() if k in hypernet_dict}
+    print('not in ',{k: v for k, v in pretrain_hypernet.items() if k not in hypernet_dict})
     hypernet_dict.update(pretrain_hypernet)
     print("non common keys ",[i for i in hypernet_dict.keys() if i not in pretrain_hypernet.keys()])
     hypernet.load_state_dict(hypernet_dict)
     '''
-    hypernet.load_state_dict(
-        torch.load('checkpoint100_small/hypernet_{}_{:08d}.pth'.format(s, epoch)))
+    #hypernet.load_state_dict(
+    #    torch.load('checkpoint100_small/hypernet_{}_{:08d}.pth'.format(s, epoch)))
 
 def save(index, epoch=True):
     if not os.path.exists('checkpoint100_small'):
@@ -133,15 +142,13 @@ def save(index, epoch=True):
     torch.save(binarizer.state_dict(),'checkpoint100_small/binarizer_{}_{:08d}.pth'.format(s, index))
 
     torch.save(decoder.state_dict(), 'checkpoint100_small/decoder_{}_{:08d}.pth'.format(s, index))
-
-    #torch.save(unet.state_dict(), 'checkpoint100_small/unet_{}_{:08d}.pth'.format(s, index))    
-    #torch.save(ff.state_dict(), 'checkpoint100_small/ff_{}_{:08d}.pth'.format(s, index))    
+ 
     torch.save(hypernet.state_dict(), 'checkpoint100_small/hypernet_{}_{:08d}.pth'.format(s, index))   
 
 #
 #resume()
 
-scheduler = LS.MultiStepLR(solver, milestones=[2, 3, 20, 50, 100], gamma=0.5)
+scheduler = LS.MultiStepLR(solver, milestones=[20, 30, 200, 500, 1000], gamma=0.5)
 
 last_epoch = 0
 if args.checkpoint:
@@ -154,10 +161,11 @@ if args.checkpoint:
 vepoch=0
 for epoch in range(last_epoch + 1, args.max_epochs + 1):
 
-    scheduler.step()
+    #scheduler.step()
 
     for batch, (data,id_num,name) in enumerate(train_loader):
         batch_t0 = time.time()
+        data = data[0]
 
         ## init lstm state
         batch_size, input_channels, height, width = data.size()
@@ -194,19 +202,19 @@ for epoch in range(last_epoch + 1, args.max_epochs + 1):
 
         hid = 16
 
-        enc_hyper_h1 = (Variable(torch.zeros(batch_size,hid)),Variable(torch.zeros(batch_size,hid)))
+        enc_hyper_h1 = (Variable(torch.zeros(1,hid)),Variable(torch.zeros(1,hid)))
 
-        enc_hyper_h2 = (Variable(torch.zeros(batch_size,hid)),Variable(torch.zeros(batch_size,hid)))
+        enc_hyper_h2 = (Variable(torch.zeros(1,hid)),Variable(torch.zeros(1,hid)))
         
-        enc_hyper_h3 = (Variable(torch.zeros(batch_size,hid)),Variable(torch.zeros(batch_size,hid)))
+        enc_hyper_h3 = (Variable(torch.zeros(1,hid)),Variable(torch.zeros(1,hid)))
 
-        dec_hyper_h1 = (Variable(torch.zeros(batch_size,hid )), Variable(torch.zeros(batch_size,hid)))
+        dec_hyper_h1 = (Variable(torch.zeros(1,hid )), Variable(torch.zeros(1,hid)))
         
-        dec_hyper_h2 = (Variable(torch.zeros(batch_size,hid)),Variable(torch.zeros(batch_size,hid)))
+        dec_hyper_h2 = (Variable(torch.zeros(1,hid)),Variable(torch.zeros(1,hid)))
         
-        dec_hyper_h3 = (Variable(torch.zeros(batch_size,hid)),Variable(torch.zeros(batch_size,hid )))
+        dec_hyper_h3 = (Variable(torch.zeros(1,hid)),Variable(torch.zeros(1,hid )))
         
-        dec_hyper_h4 = (Variable(torch.zeros(batch_size,hid)),Variable(torch.zeros(batch_size,hid )))
+        dec_hyper_h4 = (Variable(torch.zeros(1,hid)),Variable(torch.zeros(1,hid )))
 
 
         encoder_h_1 = (encoder_h_1[0].cuda(), encoder_h_1[1].cuda())
@@ -250,9 +258,9 @@ for epoch in range(last_epoch + 1, args.max_epochs + 1):
         bp_t0 = time.time()
 
         for i in range(args.iterations):
-            encoded, context, encoder_h, enc_hyper_h = encoder(res,context,encoder_h,enc_hyper_h,batch_size)
+            encoded,context, encoder_h, enc_hyper_h = encoder(res,context,encoder_h,enc_hyper_h,batch_size)
 
-            codes = binarizer(encoded,context,batch_size)
+            codes,context = binarizer(encoded,context,batch_size)
 
             output,context,decoder_h,dec_hyper_h = decoder(codes,context,decoder_h,dec_hyper_h,batch_size)
 
@@ -279,14 +287,12 @@ for epoch in range(last_epoch + 1, args.max_epochs + 1):
                '\n').format(* [l.data[0] for l in losses]))
 
         index = (epoch - 1) * len(train_loader) + batch
-        if index % 10000 == 0 and index != 0:
+        if index % 2000 == 0 and index != 0:
             vepoch+=1
-            save(vepoch)
+            #save(vepoch)
             #print("scheduled")
             scheduler.step()
 
         ## save checkpoint every 500 training steps
-        if index % 150 == 0 and index != 0:
-            save(0, False)
-
-    save(epoch)
+    if epoch % 5 == 0:
+        save(epoch)
